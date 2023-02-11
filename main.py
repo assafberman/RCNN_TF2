@@ -12,21 +12,19 @@ from keras.preprocessing.image import ImageDataGenerator
 import csv
 from tensorboard.plugins.hparams import api as hp
 
-print(tf.__version__)
-print(tf.config.list_physical_devices())
 (cifar100_image_train, cifar100_label_train), (
     cifar100_image_test, cifar100_label_test) = tf.keras.datasets.cifar100.load_data()
-encoder = OneHotEncoder(sparse_output=False)
+encoder = OneHotEncoder(sparse=False)
 cifar100_label_train_encoded = encoder.fit_transform(cifar100_label_train)
 cifar100_label_test_encoded = encoder.transform(cifar100_label_test)
 cifar100_image_train = cifar100_image_train / 255.0
 cifar100_image_test = cifar100_image_test / 255.0
-datagen = ImageDataGenerator(rotation_range=15, width_shift_range=0.2, height_shift_range=0.2,
+datagen = ImageDataGenerator(rotation_range=15, width_shift_range=0.1, height_shift_range=0.1,
                              horizontal_flip=True, vertical_flip=False, validation_split=0.2)
 datagen.fit(cifar100_image_train)
 
-HP_NUM_RCLS = hp.HParam('num_of_RCLs', hp.Discrete(range(4, 8)))
-HP_NUM_CONVS = hp.HParam('num_of_convs', hp.Discrete(range(2, 6)))
+HP_NUM_RCLS = hp.HParam('num_of_RCLs', hp.Discrete(range(2, 8)))
+HP_NUM_CONVS = hp.HParam('num_of_convs', hp.Discrete(range(2, 7)))
 METRIC_ACCURACY = hp.Metric('categorical_accuracy', display_name='categorical_accuracy')
 METRIC_CROSSENTROPY = hp.Metric('categorical_crossentropy', display_name='categorical_crossentropy')
 
@@ -68,19 +66,19 @@ def train_test_model(hparams):
     prediction = Dense(units=100, activation='softmax')(flatten)
 
     model = tf.keras.Model(inputs=input_img, outputs=prediction)
-    model.compile(optimizer=Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08),
+    model.compile(optimizer=Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07),
                   loss=CategoricalCrossentropy(),
                   metrics=CategoricalAccuracy())
-    early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5,
-                                                               min_delta=0.001, verbose=1)
-    reduce_lr_callback = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3,
-                                                              min_delta=0.001,
-                                                              verbose=1)
-    callbacks = [early_stopping_callback, reduce_lr_callback]
+    early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, verbose=1)
+    reduce_lr_callback = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=3, verbose=1)
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(f'./logs/RCL_{hparams[HP_NUM_RCLS]}_{hparams[HP_NUM_CONVS]}/',
+                                                          histogram_freq=1)
+    callbacks = [early_stopping_callback, reduce_lr_callback, tensorboard_callback]
+    #callbacks = [tensorboard_callback]
     model.fit(
         datagen.flow(cifar100_image_train, cifar100_label_train_encoded, batch_size=32, subset='training'),
-        validation_data=datagen.flow(cifar100_image_train, cifar100_label_train_encoded, batch_size=8,
-                                     subset='validation'), epochs=50, batch_size=32, callbacks=callbacks)
+        validation_data=datagen.flow(cifar100_image_train, cifar100_label_train_encoded, batch_size=32,
+                                     subset='validation'), epochs=100, batch_size=8, callbacks=callbacks)
     model.save(f'./pre_trained/RCL_{hparams[HP_NUM_RCLS]}_{hparams[HP_NUM_CONVS]}/')
     eval_loss, eval_accuracy = model.evaluate(cifar100_image_test, cifar100_label_test_encoded)
     return eval_loss, eval_accuracy
@@ -94,7 +92,7 @@ def run(run_dir, hparams):
         tf.summary.scalar('categorical_accuracy', accuracy, step=1)
 
 
-session_num = 8
+session_num = 0
 
 for num_rcls in HP_NUM_RCLS.domain.values:
     for num_convs in HP_NUM_CONVS.domain.values:
@@ -108,14 +106,7 @@ for num_rcls in HP_NUM_RCLS.domain.values:
         run(f'logs/hparam_tuning/{run_name}', hparams)
         session_num += 1
 
-# model = keras.models.load_model('pre_trained/RCL_4_5')
 # y_pred = model.predict(cifar100_image_test)
 # m = CategoricalAccuracy()
 # m.update_state(cifar100_label_test_encoded, y_pred)
-# print(f'Accuracy for {num_rcls} RCLs: {m.result().numpy()}')
 # print(f'Accuracy: {m.result().numpy()}')
-# print('Confusion matrix:')
-# conf_matrix = confusion_matrix(cifar100_label_test_encoded.argmax(axis=1), y_pred.argmax(axis=1))
-# with open('conf.csv','w+') as my_conf:
-#    csvWriter = csv.writer(my_conf, delimiter=',')
-#    csvWriter.writerows(conf_matrix)
