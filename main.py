@@ -12,17 +12,22 @@ from keras.preprocessing.image import ImageDataGenerator
 import csv
 from tensorboard.plugins.hparams import api as hp
 
+# Loading CIFAR-100 data set from keras datasets
 (cifar100_image_train, cifar100_label_train), (
     cifar100_image_test, cifar100_label_test) = tf.keras.datasets.cifar100.load_data()
+# Encoding train and test labels to one-hot encoding
 encoder = OneHotEncoder(sparse=False)
 cifar100_label_train_encoded = encoder.fit_transform(cifar100_label_train)
 cifar100_label_test_encoded = encoder.transform(cifar100_label_test)
+# Normalizing images of data set
 cifar100_image_train = cifar100_image_train / 255.0
 cifar100_image_test = cifar100_image_test / 255.0
+# Building data augmentation streamer
 datagen = ImageDataGenerator(rotation_range=15, width_shift_range=0.1, height_shift_range=0.1,
                              horizontal_flip=True, vertical_flip=False, validation_split=0.2)
 datagen.fit(cifar100_image_train)
 
+# Defining hyper-parameters to be examined using Tensorboard
 HP_NUM_RCLS = hp.HParam('num_of_RCLs', hp.Discrete(range(2, 8)))
 HP_NUM_CONVS = hp.HParam('num_of_convs', hp.Discrete(range(2, 7)))
 METRIC_ACCURACY = hp.Metric('categorical_accuracy', display_name='categorical_accuracy')
@@ -32,6 +37,7 @@ with tf.summary.create_file_writer('logs/hparam_tuning').as_default():
     hp.hparams_config(hparams=[HP_NUM_RCLS, HP_NUM_CONVS], metrics=[METRIC_ACCURACY, METRIC_CROSSENTROPY])
 
 
+# Defining single RCL block with changing number of convolutions added to the first convolution
 def RCL_block(block_input, hparams):
     conv1 = Conv2D(filters=64, kernel_size=(3, 3), padding='same', activation='relu')(block_input)
     stack2 = BatchNormalization()(conv1)
@@ -50,6 +56,7 @@ def RCL_block(block_input, hparams):
     return stack4
 
 
+# Defining the main network architecture with changing number of RCL blocks
 def train_test_model(hparams):
     input_img = Input(shape=(32, 32, 3))
     rconv1 = Conv2D(filters=64, kernel_size=[5, 5], strides=(1, 1), padding='same', activation='relu')(input_img)
@@ -69,21 +76,25 @@ def train_test_model(hparams):
     model.compile(optimizer=Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-07),
                   loss=CategoricalCrossentropy(),
                   metrics=CategoricalAccuracy())
+    # Defining set of callbacks for learning improvement
     early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, verbose=1)
     reduce_lr_callback = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=3, verbose=1)
     tensorboard_callback = tf.keras.callbacks.TensorBoard(f'./logs/RCL_{hparams[HP_NUM_RCLS]}_{hparams[HP_NUM_CONVS]}/',
                                                           histogram_freq=1)
     callbacks = [early_stopping_callback, reduce_lr_callback, tensorboard_callback]
-    #callbacks = [tensorboard_callback]
+    # Learning process of the model
     model.fit(
         datagen.flow(cifar100_image_train, cifar100_label_train_encoded, batch_size=32, subset='training'),
         validation_data=datagen.flow(cifar100_image_train, cifar100_label_train_encoded, batch_size=32,
                                      subset='validation'), epochs=100, batch_size=8, callbacks=callbacks)
+    # Saving the model to a file with respect to the nubmer of RCL blocks and number of convolutions
     model.save(f'./pre_trained/RCL_{hparams[HP_NUM_RCLS]}_{hparams[HP_NUM_CONVS]}/')
+    # Evaluation of the model
     eval_loss, eval_accuracy = model.evaluate(cifar100_image_test, cifar100_label_test_encoded)
     return eval_loss, eval_accuracy
 
 
+# Defining the runs
 def run(run_dir, hparams):
     with tf.summary.create_file_writer(run_dir).as_default():
         hp.hparams(hparams)
